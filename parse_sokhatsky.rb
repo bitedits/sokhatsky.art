@@ -4,7 +4,7 @@ require 'uri'
 require 'open-uri'
 require 'optparse'
 
-options = { all: true, recursive: nil, deep: 3 }
+options = { all: true, recursive: nil, deep: 3, epoc: 'priv' }
 OptionParser.new do |opts|
   opts.banner = "Usage: parse_sokhatsky.rb [options] [root_id]"
 
@@ -25,11 +25,19 @@ OptionParser.new do |opts|
     options[:publish] = id
     options[:all] = false unless id == 'all'
   end
+
+  opts.on("-s", "--source FILE", "Source GEDCOM file (default: sokhatsky.ged)") do |file|
+    options[:source] = file
+  end
+
+  opts.on("-e", "--epoc DIR", "Prefix directory for storage/static (default: priv)") do |dir|
+    options[:epoc] = dir
+  end
 end.parse!
 
-file_path = 'sokhatsky.ged'
-PRIV_DIR = 'priv'
-FileUtils.mkdir_p(PRIV_DIR)
+file_path = options[:source] || 'sokhatsky.ged'
+STORAGE_DIR = File.join(options[:epoc], 'storage')
+FileUtils.mkdir_p(STORAGE_DIR)
 
 individuals = {}
 families = {}
@@ -62,6 +70,8 @@ File.open(file_path, "rb").each_line do |line|
       current_record[:block] = current_block.dup
     elsif current_block_type == :fam && current_record
       current_record[:block] = current_block.dup
+    elsif current_block_type == :sour && current_record
+      current_record[:block] = current_block.dup
     elsif current_block_type == :head
       head_block = current_block.dup
     end
@@ -78,7 +88,8 @@ File.open(file_path, "rb").each_line do |line|
         id: tag_or_id, name: "", given_name: "", surname: "", 
         born_date: "", death_date: "", 
         birth_place: "", famc: nil, fams: [], objes: [], notes: [],
-        events: [], email: nil, married_name: nil, source_refs: []
+        events: [], email: nil, married_name: nil, source_refs: [],
+        sex: "U", block: []
       }
       individuals[tag_or_id] = current_record
     elsif value == "FAM"
@@ -89,7 +100,7 @@ File.open(file_path, "rb").each_line do |line|
     elsif value == "SOUR"
       current_block_type = :sour
       current_record_type = :sour
-      current_record = { id: tag_or_id, title: "", text: "" }
+      current_record = { id: tag_or_id, title: "", text: "", block: [] }
       sources[tag_or_id] = current_record
     elsif tag_or_id == "HEAD"
       current_block_type = :head
@@ -124,8 +135,15 @@ File.open(file_path, "rb").each_line do |line|
         elsif tag_or_id == "NOTE"
           current_note = value ? value.dup : ""
           current_record[:notes] << current_note
-        elsif ["OCCU", "EDUC", "EVEN", "BURI", "CHR", "RELI", "RESI"].include?(tag_or_id)
-          current_record[:events] << { tag: tag_or_id, value: value }
+        elsif tag_or_id == "CONT" && current_tag == "NOTE"
+          current_record[:notes][-1] << "\n#{value}" if current_record[:notes].last
+        elsif tag_or_id == "CONC" && current_tag == "NOTE"
+          current_record[:notes][-1] << (value || "") if current_record[:notes].last
+        elsif ["OCCU", "EDUC", "EVEN", "BURI", "CHR", "RELI", "RESI", "TITL"].include?(tag_or_id)
+          current_event = { tag: tag_or_id, value: value, date: "", place: "" }
+          current_record[:events] << current_event
+        elsif tag_or_id == "SEX"
+          current_record[:sex] = value
         end
       elsif level == 2
         if tag_or_id == "GIVN"
@@ -138,6 +156,10 @@ File.open(file_path, "rb").each_line do |line|
           current_record[:birth_place] = value
         elsif tag_or_id == "DATE" && current_tag == "DEAT"
           current_record[:death_date] = value
+        elsif tag_or_id == "DATE" && ["OCCU", "EDUC", "EVEN", "BURI", "CHR", "RELI", "RESI", "TITL"].include?(current_tag)
+          current_record[:events].last[:date] = value if current_record[:events].last
+        elsif tag_or_id == "PLAC" && ["OCCU", "EDUC", "EVEN", "BURI", "CHR", "RELI", "RESI", "TITL"].include?(current_tag)
+          current_record[:events].last[:place] = value if current_record[:events].last
         elsif current_tag == "NAME" && tag_or_id == "_MARNM"
           current_record[:married_name] = value
         elsif current_tag == "RESI" && tag_or_id == "EMAIL"
@@ -314,121 +336,6 @@ def format_info(person)
   parts.join("; ")
 end
 
-def generate_person_html(id, person, ancestors, person_dir, template)
-  clean_id = id.gsub('@', '')
-  
-  # 1. Profile Photo
-  profile_photo = "no-avatar.png"
-  photos = []
-  docs_a4 = []
-  docs_a3 = []
-
-  person[:objes].each_with_index do |obj, idx|
-    next unless obj[:file]
-    date = sanitize(obj[:date] || "unknown")
-    titl = sanitize(obj[:titl] || "media_#{idx}")
-    ext = (obj[:form] || File.extname(obj[:file] || "").delete('.')).downcase
-    ext = "jpg" if ext.empty?
-    ext = ext.split('?')[0] if ext.include?('?')
-    
-    is_doc = %w[pdf doc docx txt rtf].include?(ext) || titl.downcase =~ /metric|record|book|document|certificate|метрика|книга|свідоцтво/
-    prefix = is_doc ? "document" : "image"
-    filename = "#{prefix}-#{clean_id}-#{date}-#{titl}.#{ext}"
-    
-    if idx == 0 && !is_doc
-      profile_photo = filename
-    end
-    
-    if is_doc
-      if titl.downcase.include?("a3")
-        docs_a3 << { file: filename, title: obj[:titl] }
-      else
-        docs_a4 << { file: filename, title: obj[:titl] }
-      end
-    else
-      photos << { file: filename, title: obj[:titl] }
-    end
-  end
-
-  # 2. Ancestors Table
-  sorted_ancestors = ancestors.sort_by { |a| [a[1].to_i, a[2].to_s] }
-  ancestors_html = sorted_ancestors.map do |row|
-    color_code = row[2].to_s
-    flag_class = "flag-none"
-    if color_code.start_with?("11")
-      flag_class = "flag-blue"
-    elsif color_code.start_with?("12")
-      flag_class = "flag-green"
-    elsif color_code.start_with?("21")
-      flag_class = "flag-yellow"
-    elsif color_code.start_with?("22")
-      flag_class = "flag-red"
-    end
-    
-    flag_html = color_code == "Root" || color_code == "-1" || color_code == "-2" ? "" : "<span class='lineage-flag #{flag_class}' title='#{color_code}'></span>"
-
-    "<tr>
-      <td>#{row[0]}</td>
-      <td><span class='depth-indicator'>#{row[1]}</span></td>
-      <td>#{flag_html}</td>
-      <td><strong>#{row[3]}</strong></td>
-      <td>#{row[4]}</td>
-      <td>#{row[5]}</td>
-      <td>#{row[6]}</td>
-      <td><small>#{row[7]}</small></td>
-    </tr>"
-  end.join("\n")
-
-  # 3. Life Events
-  events = []
-  events << { tag: "BORN", value: "#{person[:born_date]} #{person[:birth_place]}".strip } unless person[:born_date].to_s.empty? && person[:birth_place].to_s.empty?
-  person[:events].each { |e| events << e unless e[:value].to_s.strip.empty? }
-  events << { tag: "DEAT", value: person[:death_date] } unless person[:death_date].to_s.empty?
-  
-  events_html = events.map do |e|
-    "<div class='event-card'>
-      <div class='event-tag'>#{e[:tag]}</div>
-      <div class='event-value'>#{e[:value]}</div>
-    </div>"
-  end.join("\n")
-
-  # 4. Photo Gallery
-  photos_html = photos.map do |p|
-    "<div class='gallery-item'>
-      <img src='#{p[:file]}' alt='#{p[:title]}'>
-    </div>"
-  end.join("\n")
-
-  # 5. Documents
-  docs_a4_html = docs_a4.map do |d|
-    "<div class='doc-card'>
-      <img src='#{d[:file]}' alt='#{d[:title]}'>
-      <div class='doc-title'>#{d[:title]}</div>
-    </div>"
-  end.join("\n")
-
-  docs_a3_html = docs_a3.map do |d|
-    "<div class='doc-card'>
-      <img src='#{d[:file]}' alt='#{d[:title]}'>
-      <div class='doc-title'>#{d[:title]}</div>
-    </div>"
-  end.join("\n")
-
-  # Replace placeholders
-  html = template.dup
-  html.gsub!("{{NAME}}", person[:name])
-  html.gsub!("{{DATES}}", "#{person[:born_date]} — #{person[:death_date]}")
-  html.gsub!("{{PROFILE_PHOTO}}", profile_photo)
-  html.gsub!("{{BIOGRAPHY}}", person[:notes].join("\n\n"))
-  html.gsub!("{{ANCESTORS_TABLE}}", ancestors_html)
-  html.gsub!("{{EVENTS_LIST}}", events_html)
-  html.gsub!("{{PHOTO_GALLERY}}", photos_html)
-  html.gsub!("{{DOCUMENTS_A4}}", docs_a4_html)
-  html.gsub!("{{DOCUMENTS_A3}}", docs_a3_html)
-
-  File.write(File.join(person_dir, "index.html"), html)
-end
-
 def sanitize(str)
   res = str.to_s.gsub(/[^\w\p{Cyrillic}.]/, '_')
   res.gsub(/_+/, '_').gsub(/^_+|_+$/, '')
@@ -466,22 +373,22 @@ def get_ancestors_list(id, depth, color, inds, fams, list)
   end
 end
 
-# Prepare publishing
-publish_template = nil
-if options[:publish]
-  template_path = File.join('assets', 'templates', 'person.html')
-  if File.exist?(template_path)
-    publish_template = File.read(template_path)
-  else
-    puts "Warning: Template not found at #{template_path}"
-  end
+# Export Master Tables
+write_csv(File.join(STORAGE_DIR, "families.csv"), ["Id", "Husb", "Wife", "Children"], families.values.map { |f| [f[:id].gsub('@',''), f[:husb].to_s.gsub('@',''), f[:wife].to_s.gsub('@',''), f[:children].join('|').gsub('@','')] })
+write_csv(File.join(STORAGE_DIR, "sources.csv"), ["Id", "Title", "Text"], sources.values.map { |s| [s[:id].gsub('@',''), s[:title], s[:text]] })
+
+# Export Raw Global Blocks
+File.write(File.join(STORAGE_DIR, "header.ged"), head_block.join(""))
+families.each do |id, f|
+  File.write(File.join(STORAGE_DIR, "raw-FAM-#{id.gsub('@','')}.ged"), f[:block].join(""))
+end
+sources.each do |id, s|
+  File.write(File.join(STORAGE_DIR, "raw-SOUR-#{id.gsub('@','')}.ged"), s[:block].join(""))
 end
 
 puts "Processing #{target_ids.size} individuals..."
 full_results = []
 
-# To avoid creating 38k folders at once, you might want to throttle or just proceed.
-# We will create folders for everyone in the target list.
 target_ids.each do |id|
   person = individuals[id]
   next unless person
@@ -493,39 +400,46 @@ target_ids.each do |id|
   color = rel ? rel[:color] : "N/A"
   full_results << [ clean_id, depth, color, person[:name], person[:born_date], person[:death_date], person[:birth_place], format_info(person) ]
 
-  # Folder naming - FLAT hierarchy in priv/
+  # Folder naming - FLAT hierarchy in priv/storage/
   folder_name = get_folder_name(id, person)
-  person_dir = File.join(PRIV_DIR, folder_name)
+  person_dir = File.join(STORAGE_DIR, folder_name)
   FileUtils.mkdir_p(person_dir)
   
-  # Extraction
+  # Isomorphic Extraction
+  File.write(File.join(person_dir, "raw-#{clean_id}.ged"), person[:block].join(""))
+  
+  indi_rows = [
+    ["Id", clean_id],
+    ["Name", person[:name]],
+    ["Given Name", person[:given_name]],
+    ["Surname", person[:surname]],
+    ["Sex", person[:sex]],
+    ["Born Date", person[:born_date]],
+    ["Birth Place", person[:birth_place]],
+    ["Death Date", person[:death_date]],
+    ["Married Name", person[:married_name]],
+    ["Email", person[:email]]
+  ]
+  write_csv(File.join(person_dir, "indi-#{clean_id}.csv"), ["Field", "Value"], indi_rows)
+
   File.write(File.join(person_dir, "bio-#{clean_id}.txt"), person[:notes].join("\n\n")) unless person[:notes].empty?
   
-  # Events
-  unless person[:events].empty? && !person[:married_name] && !person[:email]
-    lines = []
-    lines << "Married Name: #{person[:married_name]}" if person[:married_name]
-    lines << "Email: #{person[:email]}" if person[:email]
-    person[:events].each { |e| lines << "#{e[:tag]}: #{e[:value]}" }
-    File.write(File.join(person_dir, "events-#{clean_id}.txt"), lines.join("\n"))
+  # Detailed Events
+  unless person[:events].empty?
+    csv_rows = person[:events].map { |e| [e[:tag], e[:value], e[:date], e[:place]] }
+    write_csv(File.join(person_dir, "events-#{clean_id}.csv"), ["Tag", "Value", "Date", "Place"], csv_rows)
     
-    csv_rows = []
-    csv_rows << ["Married Name", person[:married_name]] if person[:married_name]
-    csv_rows << ["Email", person[:email]] if person[:email]
-    person[:events].each { |e| csv_rows << [e[:tag], e[:value]] }
-    write_csv(File.join(person_dir, "events-#{clean_id}.csv"), ["Attribute", "Value"], csv_rows)
+    txt_lines = person[:events].map { |e| "#{e[:tag]}: #{e[:value]} (#{e[:date]}) #{e[:place]}".strip }
+    File.write(File.join(person_dir, "events-#{clean_id}.txt"), txt_lines.join("\n"))
   end
   
-  # Sources
-  unless person[:source_refs].empty?
-    s_lines = person[:source_refs].map do |s_id|
-       s = sources[s_id]
-       s ? "Source #{s_id}: #{s[:title]} #{s[:text]}" : "Source #{s_id}"
-    end
-    File.write(File.join(person_dir, "sources-#{clean_id}.txt"), s_lines.join("\n"))
+  # Multimedia Metadata
+  unless person[:objes].empty?
+    obj_rows = person[:objes].map { |o| [o[:file], o[:titl], o[:date], o[:form]] }
+    write_csv(File.join(person_dir, "multimedia-#{clean_id}.csv"), ["File", "Title", "Date", "Format"], obj_rows)
   end
-  
-  # Multimedia
+
+  # Multimedia Download
   person[:objes].each_with_index do |obj, idx|
     next unless obj[:file]
     date = sanitize(obj[:date] || "unknown")
@@ -537,21 +451,14 @@ target_ids.each do |id|
     download_file(obj[:file], File.join(person_dir, "#{prefix}-#{clean_id}-#{date}-#{titl}.#{ext}")) if obj[:file].start_with?('http')
   end
   
-  # Sub-tree CSV (Ancestor tree for THIS person)
+  # Ancestor tree for THIS person
   sub_csv = File.join(person_dir, "#{clean_id}.csv")
   sub_res = []
   get_ancestors_list(id, 0, "Root", individuals, families, sub_res)
   write_csv(sub_csv, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], sub_res)
-
-  # HTML Generation
-  if options[:publish] == 'all' || options[:publish] == clean_id || options[:publish] == id
-    if publish_template
-      generate_person_html(id, person, sub_res, person_dir, publish_template)
-    end
-  end
 end
 
-main_csv_path = File.join(PRIV_DIR, "sokhatsky_familysearch.csv")
+main_csv_path = File.join(STORAGE_DIR, "sokhatsky_familysearch.csv")
 write_csv(main_csv_path, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], full_results)
 
-puts "Complete. Processed #{target_ids.size} people into #{PRIV_DIR}/"
+puts "Complete. Processed #{target_ids.size} people into #{STORAGE_DIR}/"
