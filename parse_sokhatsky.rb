@@ -9,6 +9,7 @@ FileUtils.mkdir_p(PRIV_DIR)
 
 individuals = {}
 families = {}
+sources = {}
 head_block = []
 
 current_record = nil
@@ -20,7 +21,7 @@ current_block = []
 current_note = nil
 current_obje = nil
 
-puts "Parsing big GEDCOM file (#{file_path})..."
+puts "Parsing big GEDCOM file (#{file_path}) - 38k records..."
 
 File.open(file_path, "rb").each_line do |line|
   orig_line = line
@@ -53,7 +54,7 @@ File.open(file_path, "rb").each_line do |line|
         id: tag_or_id, name: "", given_name: "", surname: "", 
         born_date: "", death_date: "", 
         birth_place: "", famc: nil, fams: [], objes: [], notes: [],
-        events: [], email: nil, married_name: nil
+        events: [], email: nil, married_name: nil, source_refs: []
       }
       individuals[tag_or_id] = current_record
     elsif value == "FAM"
@@ -61,6 +62,11 @@ File.open(file_path, "rb").each_line do |line|
       current_record_type = :fam
       current_record = { id: tag_or_id, husb: nil, wife: nil, block: [] }
       families[tag_or_id] = current_record
+    elsif value == "SOUR"
+      current_block_type = :sour
+      current_record_type = :sour
+      current_record = { id: tag_or_id, title: "", text: "" }
+      sources[tag_or_id] = current_record
     elsif tag_or_id == "HEAD"
       current_block_type = :head
       current_record_type = nil
@@ -86,6 +92,8 @@ File.open(file_path, "rb").each_line do |line|
           current_record[:famc] = value
         elsif tag_or_id == "FAMS"
           current_record[:fams] << value
+        elsif tag_or_id == "SOUR"
+          current_record[:source_refs] << value if value
         elsif tag_or_id == "OBJE"
           current_obje = { file: nil, form: nil, titl: nil, date: nil }
           current_record[:objes] << current_obje
@@ -136,11 +144,23 @@ File.open(file_path, "rb").each_line do |line|
           current_record[:wife] = value
         end
       end
+    elsif current_record_type == :sour
+      if level == 1
+        current_tag = tag_or_id
+        if tag_or_id == "TITL"
+          current_record[:title] = value
+        elsif tag_or_id == "TEXT"
+          current_record[:text] = value
+        end
+      elsif level == 2
+        if current_tag == "TEXT"
+           current_record[:text] << "\n" << (value || "")
+        end
+      end
     end
   end
 end
 
-# Store the very last block
 if current_block_type == :indi && current_record
   current_record[:block] = current_block.dup
 elsif current_block_type == :fam && current_record
@@ -160,12 +180,32 @@ root_id = if param_root && individuals[param_root]
             found || individuals.keys.find { |id| individuals[id][:famc].nil? } || individuals.keys.first
           end
 
-if root_id.nil?
-  puts "Error: No individual found."
-  exit 1
+puts "Root selected: #{root_id} (#{individuals[root_id][:name]})"
+
+# Ancestral relationship map for the main CSV
+ancestor_info = {}
+def map_ancestors(id, depth, color, inds, fams, map)
+  return if depth > 12 || map[id]
+  person = inds[id]
+  return unless person
+  map[id] = { depth: depth, color: color }
+  famc = person[:famc]
+  if famc && fams[famc]
+    h, w = fams[famc][:husb], fams[famc][:wife]
+    hc, wc = color, color
+    if depth == 0
+      hc, wc = "-1", "-2"
+    elsif depth == 1
+      hc = (color == "-1" ? "11" : "21")
+      wc = (color == "-1" ? "12" : "22")
+    end
+    map_ancestors(h, depth + 1, hc, inds, fams, map) if h
+    map_ancestors(w, depth + 1, wc, inds, fams, map) if w
+  end
 end
 
-puts "Root selected: #{root_id} (#{individuals[root_id][:name]})"
+puts "Mapping main ancestral branch..."
+map_ancestors(root_id, 0, "Root", individuals, families, ancestor_info)
 
 def download_file(url, path)
   return if File.exist?(path)
@@ -184,7 +224,7 @@ def write_csv(csv_path, headers, rows)
   end
 end
 
-def format_events(person)
+def format_info(person)
   parts = []
   parts << "Married Name: #{person[:married_name]}" if person[:married_name]
   parts << "Email: #{person[:email]}" if person[:email]
@@ -196,82 +236,108 @@ def format_events(person)
 end
 
 def sanitize(str)
-  # Replace characters that could be problematic in file names
   res = str.to_s.gsub(/[^\w\p{Cyrillic}.]/, '_')
   res.gsub(/_+/, '_').gsub(/^_+|_+$/, '')
 end
 
-def traverse(id, depth, current_color, inds, fams, res, is_main_tree = true)
+def get_folder_name(id, person)
+  clean_id = id.gsub('@', '')
+  return clean_id if person[:given_name].to_s.empty? && person[:surname].to_s.empty?
+  g = sanitize(person[:given_name])
+  s = sanitize(person[:surname].upcase)
+  folder = clean_id
+  folder += "-#{g}" unless g.empty?
+  folder += "-#{s}" unless s.empty?
+  folder
+end
+
+# Main traversal for a single person's CSV
+def get_ancestors_list(id, depth, color, inds, fams, list)
   return if depth > 12
   person = inds[id]
   return unless person
-  
-  clean_id = id.gsub('@', '')
-  other_info = format_events(person)
-  res << [ clean_id, depth, current_color, person[:name], person[:born_date], person[:death_date], person[:birth_place], other_info]
-
-  if is_main_tree && depth > 3
-    # Folder name: {id}-{given}-{SURNAME}
-    folder_name = clean_id
-    unless person[:given_name].to_s.empty? && person[:surname].to_s.empty?
-      g = sanitize(person[:given_name])
-      s = sanitize(person[:surname].upcase)
-      folder_name = "#{clean_id}"
-      folder_name += "-#{g}" unless g.empty?
-      folder_name += "-#{s}" unless s.empty?
-    end
-    
-    person_dir = File.join(PRIV_DIR, folder_name)
-    FileUtils.mkdir_p(person_dir)
-    
-    # Files
-    File.write(File.join(person_dir, "bio-#{clean_id}.txt"), person[:notes].join("\n\n")) unless person[:notes].empty?
-    
-    unless person[:events].empty? && !person[:married_name] && !person[:email]
-      File.write(File.join(person_dir, "events-#{clean_id}.txt"), person[:events].map { |e| "#{e[:tag]}: #{e[:value]}" }.join("\n"))
-      ev_rows = person[:events].map { |e| [e[:tag], e[:value]] }
-      write_csv(File.join(person_dir, "events-#{clean_id}.csv"), ["Attribute", "Value"], ev_rows)
-    end
-    
-    person[:objes].each_with_index do |obj, idx|
-      next unless obj[:file]
-      date_str = sanitize(obj[:date] || "unknown")
-      attr_str = sanitize(obj[:titl] || "media_#{idx}")
-      ext = (obj[:form] || File.extname(obj[:file] || "").delete('.')).downcase
-      ext = "jpg" if ext.empty?
-      ext = ext.split('?')[0] if ext.include?('?')
-      prefix = %w[pdf doc docx txt rtf].include?(ext) ? "document" : "image"
-      download_file(obj[:file], File.join(person_dir, "#{prefix}-#{clean_id}-#{date_str}-#{attr_str}.#{ext}")) if obj[:file].start_with?('http')
-    end
-    
-    sub_csv_path = File.join(person_dir, "#{clean_id}.csv")
-    if !File.exist?(sub_csv_path)
-      sub_results = []
-      traverse(id, 0, "Root", inds, fams, sub_results, false)
-      write_csv(sub_csv_path, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], sub_results)
-    end
-  end
-
+  list << [ id.gsub('@',''), depth, color, person[:name], person[:born_date], person[:death_date], person[:birth_place], format_info(person)]
   famc = person[:famc]
   if famc && fams[famc]
-    husb_id = fams[famc][:husb]
-    wife_id = fams[famc][:wife]
-    h_col, w_col = current_color, current_color
+    h, w = fams[famc][:husb], fams[famc][:wife]
+    hc, wc = color, color
     if depth == 0
-      h_col, w_col = "-1", "-2"
+      hc, wc = "-1", "-2"
     elsif depth == 1
-      h_col = (current_color == "-1" ? "11" : "21")
-      w_col = (current_color == "-1" ? "12" : "22")
+      hc = (color == "-1" ? "11" : "21")
+      wc = (color == "-1" ? "12" : "22")
     end
-    traverse(husb_id, depth + 1, h_col, inds, fams, res, is_main_tree) if husb_id
-    traverse(wife_id, depth + 1, w_col, inds, fams, res, is_main_tree) if wife_id
+    get_ancestors_list(h, depth + 1, hc, inds, fams, list) if h
+    get_ancestors_list(w, depth + 1, wc, inds, fams, list) if w
   end
 end
 
-puts "Traversing tree and generating data..."
-results = []
-traverse(root_id, 0, "Root", individuals, families, results, true)
+puts "Processing all #{individuals.size} individuals..."
+full_results = []
 
-write_csv(File.join(PRIV_DIR, "sokhatsky_familysearch.csv"), ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], results)
+# To avoid creating 38k folders at once, you might want to throttle or just proceed.
+# We will create folders for everyone.
+individuals.each do |id, person|
+  clean_id = id.gsub('@', '')
+  
+  # Main CSV row
+  rel = ancestor_info[id]
+  depth = rel ? rel[:depth] : "N/A"
+  color = rel ? rel[:color] : "N/A"
+  full_results << [ clean_id, depth, color, person[:name], person[:born_date], person[:death_date], person[:birth_place], format_info(person) ]
 
-puts "Results generated successfully under #{PRIV_DIR}/"
+  # Folder naming - FLAT hierarchy in priv/
+  folder_name = get_folder_name(id, person)
+  person_dir = File.join(PRIV_DIR, folder_name)
+  FileUtils.mkdir_p(person_dir)
+  
+  # Extraction
+  File.write(File.join(person_dir, "bio-#{clean_id}.txt"), person[:notes].join("\n\n")) unless person[:notes].empty?
+  
+  # Events
+  unless person[:events].empty? && !person[:married_name] && !person[:email]
+    lines = []
+    lines << "Married Name: #{person[:married_name]}" if person[:married_name]
+    lines << "Email: #{person[:email]}" if person[:email]
+    person[:events].each { |e| lines << "#{e[:tag]}: #{e[:value]}" }
+    File.write(File.join(person_dir, "events-#{clean_id}.txt"), lines.join("\n"))
+    
+    csv_rows = []
+    csv_rows << ["Married Name", person[:married_name]] if person[:married_name]
+    csv_rows << ["Email", person[:email]] if person[:email]
+    person[:events].each { |e| csv_rows << [e[:tag], e[:value]] }
+    write_csv(File.join(person_dir, "events-#{clean_id}.csv"), ["Attribute", "Value"], csv_rows)
+  end
+  
+  # Sources
+  unless person[:source_refs].empty?
+    s_lines = person[:source_refs].map do |s_id|
+       s = sources[s_id]
+       s ? "Source #{s_id}: #{s[:title]} #{s[:text]}" : "Source #{s_id}"
+    end
+    File.write(File.join(person_dir, "sources-#{clean_id}.txt"), s_lines.join("\n"))
+  end
+  
+  # Multimedia
+  person[:objes].each_with_index do |obj, idx|
+    next unless obj[:file]
+    date = sanitize(obj[:date] || "unknown")
+    titl = sanitize(obj[:titl] || "media_#{idx}")
+    ext = (obj[:form] || File.extname(obj[:file] || "").delete('.')).downcase
+    ext = "jpg" if ext.empty?
+    ext = ext.split('?')[0] if ext.include?('?')
+    prefix = %w[pdf doc docx txt rtf].include?(ext) ? "document" : "image"
+    download_file(obj[:file], File.join(person_dir, "#{prefix}-#{clean_id}-#{date}-#{titl}.#{ext}")) if obj[:file].start_with?('http')
+  end
+  
+  # Sub-tree CSV (Ancestor tree for THIS person)
+  sub_csv = File.join(person_dir, "#{clean_id}.csv")
+  sub_res = []
+  get_ancestors_list(id, 0, "Root", individuals, families, sub_res)
+  write_csv(sub_csv, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], sub_res)
+end
+
+main_csv_path = File.join(PRIV_DIR, "sokhatsky_familysearch.csv")
+write_csv(main_csv_path, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], full_results)
+
+puts "Complete. Processed #{individuals.size} people into #{PRIV_DIR}/"
