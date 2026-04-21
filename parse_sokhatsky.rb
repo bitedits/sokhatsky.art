@@ -2,6 +2,25 @@ require 'csv'
 require 'fileutils'
 require 'uri'
 require 'open-uri'
+require 'optparse'
+
+options = { all: true, recursive: nil, deep: 3 }
+OptionParser.new do |opts|
+  opts.banner = "Usage: parse_sokhatsky.rb [options] [root_id]"
+
+  opts.on("-a", "--all", "Sequential all one by one (default)") do
+    options[:all] = true
+  end
+
+  opts.on("-r", "--recursive ID", "Recursive fetch starting from ID") do |id|
+    options[:recursive] = id
+    options[:all] = false
+  end
+
+  opts.on("-d", "--deep N", Integer, "Limit recursive fetch depth (default 3)") do |n|
+    options[:deep] = n
+  end
+end.parse!
 
 file_path = 'sokhatsky.ged'
 PRIV_DIR = 'priv'
@@ -60,7 +79,7 @@ File.open(file_path, "rb").each_line do |line|
     elsif value == "FAM"
       current_block_type = :fam
       current_record_type = :fam
-      current_record = { id: tag_or_id, husb: nil, wife: nil, block: [] }
+      current_record = { id: tag_or_id, husb: nil, wife: nil, children: [], block: [] }
       families[tag_or_id] = current_record
     elsif value == "SOUR"
       current_block_type = :sour
@@ -142,6 +161,8 @@ File.open(file_path, "rb").each_line do |line|
           current_record[:husb] = value
         elsif tag_or_id == "WIFE"
           current_record[:wife] = value
+        elsif tag_or_id == "CHIL"
+          current_record[:children] << value
         end
       end
     elsif current_record_type == :sour
@@ -168,7 +189,7 @@ elsif current_block_type == :fam && current_record
 end
 
 # Root determination
-param_root = ARGV[0]
+param_root = options[:recursive] || ARGV[0]
 if param_root
   param_root = "@#{param_root}@" unless param_root.start_with?("@")
 end
@@ -180,7 +201,56 @@ root_id = if param_root && individuals[param_root]
             found || individuals.keys.find { |id| individuals[id][:famc].nil? } || individuals.keys.first
           end
 
+# Cluster discovery for recursive fetch
+def find_cluster(start_id, max_depth, inds, fams)
+  cluster = Set.new([start_id])
+  current_level = [start_id]
+
+  max_depth.times do
+    next_level = []
+    current_level.each do |id|
+      person = inds[id]
+      next unless person
+
+      # Parents
+      if person[:famc] && fams[person[:famc]]
+        f = fams[person[:famc]]
+        [f[:husb], f[:wife]].compact.each do |pid|
+          unless cluster.include?(pid)
+            cluster << pid
+            next_level << pid
+          end
+        end
+      end
+
+      # Spouses and Children
+      person[:fams].each do |fid|
+        f = fams[fid]
+        next unless f
+        [f[:husb], f[:wife]].compact.concat(f[:children]).each do |pid|
+          unless cluster.include?(pid)
+            cluster << pid
+            next_level << pid
+          end
+        end
+      end
+    end
+    break if next_level.empty?
+    current_level = next_level
+  end
+  cluster.to_a
+end
+
+require 'set'
+target_ids = if options[:recursive]
+               puts "Discovering recursive cluster for #{root_id} (deep: #{options[:deep]})..."
+               find_cluster(root_id, options[:deep], individuals, families)
+             else
+               individuals.keys
+             end
+
 puts "Root selected: #{root_id} (#{individuals[root_id][:name]})"
+puts "Targeting #{target_ids.size} individuals..."
 
 # Ancestral relationship map for the main CSV
 ancestor_info = {}
@@ -272,12 +342,14 @@ def get_ancestors_list(id, depth, color, inds, fams, list)
   end
 end
 
-puts "Processing all #{individuals.size} individuals..."
+puts "Processing #{target_ids.size} individuals..."
 full_results = []
 
 # To avoid creating 38k folders at once, you might want to throttle or just proceed.
-# We will create folders for everyone.
-individuals.each do |id, person|
+# We will create folders for everyone in the target list.
+target_ids.each do |id|
+  person = individuals[id]
+  next unless person
   clean_id = id.gsub('@', '')
   
   # Main CSV row
@@ -340,4 +412,4 @@ end
 main_csv_path = File.join(PRIV_DIR, "sokhatsky_familysearch.csv")
 write_csv(main_csv_path, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], full_results)
 
-puts "Complete. Processed #{individuals.size} people into #{PRIV_DIR}/"
+puts "Complete. Processed #{target_ids.size} people into #{PRIV_DIR}/"
