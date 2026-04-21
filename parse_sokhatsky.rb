@@ -4,7 +4,7 @@ require 'uri'
 require 'open-uri'
 require 'optparse'
 
-options = { all: true, recursive: nil, deep: 3, epoc: 'priv' }
+options = { all: true, recursive: nil, deep: 3, epoc: 'priv', source: nil, from: nil }
 OptionParser.new do |opts|
   opts.banner = "Usage: parse_sokhatsky.rb [options] [root_id]"
 
@@ -32,6 +32,10 @@ OptionParser.new do |opts|
 
   opts.on("-e", "--epoc DIR", "Prefix directory for storage/static (default: priv)") do |dir|
     options[:epoc] = dir
+  end
+
+  opts.on("-f", "--from ID", "Start sequential processing from this ID (requires --all)") do |id|
+    options[:from] = id.start_with?('@') ? id : "@#{id}@"
   end
 end.parse!
 
@@ -386,13 +390,25 @@ sources.each do |id, s|
   File.write(File.join(STORAGE_DIR, "raw-SOUR-#{id.gsub('@','')}.ged"), s[:block].join(""))
 end
 
+target_ids = target_ids.sort if options[:all]
+if options[:all] && options[:from]
+  start_index = target_ids.index(options[:from])
+  if start_index
+    puts "Starting from #{options[:from]} (index #{start_index})..."
+    target_ids = target_ids[start_index..-1]
+  else
+    puts "Warning: Start ID #{options[:from]} not found. Processing all."
+  end
+end
+
 puts "Processing #{target_ids.size} individuals..."
 full_results = []
 
-target_ids.each do |id|
+target_ids.each_with_index do |id, idx|
   person = individuals[id]
   next unless person
   clean_id = id.gsub('@', '')
+  print "\rProcessing [#{idx + 1}/#{target_ids.size}] #{id} (#{person[:name]})".ljust(80)
   
   # Main CSV row
   rel = ancestor_info[id]
