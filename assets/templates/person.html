@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{NAME}} - Родове дерево Сохацьких</title>
+    <link rel="stylesheet" href="../../assets/css/person.css">
+</head>
+<body>
+    <div class="container">
+        <header class="profile-header">
+            <div class="profile-photo-container">
+                <img src="{{PROFILE_PHOTO}}" alt="{{NAME}}" class="profile-photo" onerror="this.src='../../assets/img/no-avatar.png'">
+            </div>
+            <h1 class="person-name">{{NAME}}</h1>
+            <div class="person-dates">{{DATES}}</div>
+        </header>
+
+        <section id="biography">
+            <h2>Біографія</h2>
+            <div class="biography">{{BIOGRAPHY}}</div>
+        </section>
+
+        <section id="ancestors">
+            <h2>Список предків</h2>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Id</th>
+                            <th>Глибина</th>
+                            <th>Колір</th>
+                            <th>Ім'я</th>
+                            <th>Народження</th>
+                            <th>Смерть</th>
+                            <th>Місце народження</th>
+                            <th>Інше</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{ANCESTORS_TABLE}}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section id="events">
+            <h2>Життєвий шлях</h2>
+            <div class="events-list">
+                {{EVENTS_LIST}}
+            </div>
+        </section>
+
+        <section id="photos">
+            <h2>Фотогалерея</h2>
+            <div class="gallery-3-col">
+                {{PHOTO_GALLERY}}
+            </div>
+        </section>
+
+        <section id="documents">
+            <h2>Офіційні документи та метричні книги</h2>
+            <div class="docs-grid a4">
+                {{DOCUMENTS_A4}}
+            </div>
+            <div class="docs-grid a3" style="margin-top: 2rem;">
+                {{DOCUMENTS_A3}}
+            </div>
+        </section>
+    </div>
+</body>
+</html>

@@ -1,0 +1,279 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400..900;1,400..900&display=swap');
+
+:root {
+    --primary: #1a1a1a;
+    --secondary: #2d2d2d;
+    --accent: #c5a059; /* Gold/Bronze accent */
+    --text: #f0f0f0;
+    --text-muted: #a0a0a0;
+    --bg: #0f0f0f;
+    --card-bg: rgba(45, 45, 45, 0.5);
+    --border: rgba(255, 255, 255, 0.1);
+    --glass: rgba(255, 255, 255, 0.03);
+    --font-sans: 'Inter', sans-serif;
+    --font-serif: 'Playfair Display', serif;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    line-height: 1.6;
+    overflow-x: hidden;
+}
+
+.container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 2rem;
+}
+
+/* Header & Profile */
+.profile-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    margin-bottom: 4rem;
+    padding-top: 2rem;
+}
+
+.profile-photo-container {
+    width: 240px;
+    height: 240px;
+    border-radius: 50%;
+    padding: 8px;
+    background: linear-gradient(45deg, var(--accent), transparent);
+    margin-bottom: 2rem;
+    box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+}
+
+.profile-photo {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 4px solid var(--bg);
+}
+
+.person-name {
+    font-family: var(--font-serif);
+    font-size: 3.5rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.02em;
+    color: var(--text);
+}
+
+.person-dates {
+    font-size: 1.2rem;
+    color: var(--accent);
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}
+
+/* Sections */
+section {
+    margin-bottom: 5rem;
+}
+
+h2 {
+    font-family: var(--font-serif);
+    font-size: 2rem;
+    margin-bottom: 2rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+h2::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border), transparent);
+}
+
+/* Biography */
+.biography {
+    font-size: 1.1rem;
+    color: var(--text-muted);
+    white-space: pre-wrap;
+    background: var(--glass);
+    padding: 2rem;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+}
+
+/* Ancestors Table */
+.table-wrapper {
+    overflow-x: auto;
+    background: var(--glass);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+th {
+    text-align: left;
+    padding: 1rem;
+    background: rgba(255,255,255,0.05);
+    color: var(--accent);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+}
+
+td {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+tr:last-child td {
+    border-bottom: none;
+}
+
+.depth-indicator {
+    display: inline-block;
+    width: 24px;
+    height: 24px;
+    line-height: 24px;
+    text-align: center;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 700;
+    font-size: 0.7rem;
+}
+
+/* Lineage Flags */
+.lineage-flag {
+    display: inline-block;
+    width: 32px;
+    height: 12px;
+    border-radius: 2px;
+    vertical-align: middle;
+}
+
+.flag-blue   { background-color: #4a90e2; opacity: 0.8; }
+.flag-green  { background-color: #7ed321; opacity: 0.8; }
+.flag-yellow { background-color: #f5a623; opacity: 0.8; }
+.flag-red    { background-color: #d0021b; opacity: 0.8; }
+.flag-none   { background-color: transparent; border: 1px solid var(--border); }
+
+/* Life Events Timeline */
+.events-list {
+    display: grid;
+    gap: 1.5rem;
+}
+
+.event-card {
+    display: flex;
+    gap: 2rem;
+    background: var(--glass);
+    padding: 1.5rem;
+    border-radius: 12px;
+    border-left: 4px solid var(--accent);
+    transition: transform 0.3s ease;
+}
+
+.event-card:hover {
+    transform: translateX(10px);
+    background: rgba(255,255,255,0.05);
+}
+
+.event-tag {
+    font-weight: 700;
+    color: var(--accent);
+    min-width: 80px;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+}
+
+.event-value {
+    color: var(--text);
+}
+
+/* Instagram Gallery */
+.gallery-3-col {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1rem;
+}
+
+.gallery-item {
+    aspect-ratio: 1 / 1;
+    overflow: hidden;
+    border-radius: 8px;
+    cursor: pointer;
+    position: relative;
+}
+
+.gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+}
+
+.gallery-item:hover img {
+    transform: scale(1.1);
+}
+
+/* Documents Section */
+.docs-grid {
+    display: grid;
+    gap: 2rem;
+}
+
+.docs-grid.a4 {
+    grid-template-columns: repeat(2, 1fr);
+}
+
+.docs-grid.a3 {
+    grid-template-columns: 1fr;
+}
+
+.doc-card {
+    background: var(--glass);
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.doc-card img {
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin-bottom: 1rem;
+}
+
+.doc-title {
+    font-size: 0.9rem;
+    color: var(--accent);
+    font-weight: 500;
+    text-align: center;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .container { padding: 1rem; }
+    .person-name { font-size: 2.5rem; }
+    .gallery-3-col { grid-template-columns: repeat(2, 1fr); }
+    .docs-grid.a4 { grid-template-columns: 1fr; }
+    .event-card { flex-direction: column; gap: 0.5rem; }
+}
