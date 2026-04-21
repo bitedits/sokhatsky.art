@@ -20,6 +20,11 @@ OptionParser.new do |opts|
   opts.on("-d", "--deep N", Integer, "Limit recursive fetch depth (default 3)") do |n|
     options[:deep] = n
   end
+
+  opts.on("-p", "--publish ID", "Publish person page(s). Use 'all' for everyone in target list.") do |id|
+    options[:publish] = id
+    options[:all] = false unless id == 'all'
+  end
 end.parse!
 
 file_path = 'sokhatsky.ged'
@@ -245,6 +250,10 @@ require 'set'
 target_ids = if options[:recursive]
                puts "Discovering recursive cluster for #{root_id} (deep: #{options[:deep]})..."
                find_cluster(root_id, options[:deep], individuals, families)
+             elsif options[:publish] && options[:publish] != 'all'
+               id = options[:publish]
+               id = "@#{id}@" unless id.start_with?("@")
+               [id]
              else
                individuals.keys
              end
@@ -305,6 +314,121 @@ def format_info(person)
   parts.join("; ")
 end
 
+def generate_person_html(id, person, ancestors, person_dir, template)
+  clean_id = id.gsub('@', '')
+  
+  # 1. Profile Photo
+  profile_photo = "no-avatar.png"
+  photos = []
+  docs_a4 = []
+  docs_a3 = []
+
+  person[:objes].each_with_index do |obj, idx|
+    next unless obj[:file]
+    date = sanitize(obj[:date] || "unknown")
+    titl = sanitize(obj[:titl] || "media_#{idx}")
+    ext = (obj[:form] || File.extname(obj[:file] || "").delete('.')).downcase
+    ext = "jpg" if ext.empty?
+    ext = ext.split('?')[0] if ext.include?('?')
+    
+    is_doc = %w[pdf doc docx txt rtf].include?(ext) || titl.downcase =~ /metric|record|book|document|certificate|метрика|книга|свідоцтво/
+    prefix = is_doc ? "document" : "image"
+    filename = "#{prefix}-#{clean_id}-#{date}-#{titl}.#{ext}"
+    
+    if idx == 0 && !is_doc
+      profile_photo = filename
+    end
+    
+    if is_doc
+      if titl.downcase.include?("a3")
+        docs_a3 << { file: filename, title: obj[:titl] }
+      else
+        docs_a4 << { file: filename, title: obj[:titl] }
+      end
+    else
+      photos << { file: filename, title: obj[:titl] }
+    end
+  end
+
+  # 2. Ancestors Table
+  sorted_ancestors = ancestors.sort_by { |a| [a[1].to_i, a[2].to_s] }
+  ancestors_html = sorted_ancestors.map do |row|
+    color_code = row[2].to_s
+    flag_class = "flag-none"
+    if color_code.start_with?("11")
+      flag_class = "flag-blue"
+    elsif color_code.start_with?("12")
+      flag_class = "flag-green"
+    elsif color_code.start_with?("21")
+      flag_class = "flag-yellow"
+    elsif color_code.start_with?("22")
+      flag_class = "flag-red"
+    end
+    
+    flag_html = color_code == "Root" || color_code == "-1" || color_code == "-2" ? "" : "<span class='lineage-flag #{flag_class}' title='#{color_code}'></span>"
+
+    "<tr>
+      <td>#{row[0]}</td>
+      <td><span class='depth-indicator'>#{row[1]}</span></td>
+      <td>#{flag_html}</td>
+      <td><strong>#{row[3]}</strong></td>
+      <td>#{row[4]}</td>
+      <td>#{row[5]}</td>
+      <td>#{row[6]}</td>
+      <td><small>#{row[7]}</small></td>
+    </tr>"
+  end.join("\n")
+
+  # 3. Life Events
+  events = []
+  events << { tag: "BORN", value: "#{person[:born_date]} #{person[:birth_place]}".strip } unless person[:born_date].to_s.empty? && person[:birth_place].to_s.empty?
+  person[:events].each { |e| events << e unless e[:value].to_s.strip.empty? }
+  events << { tag: "DEAT", value: person[:death_date] } unless person[:death_date].to_s.empty?
+  
+  events_html = events.map do |e|
+    "<div class='event-card'>
+      <div class='event-tag'>#{e[:tag]}</div>
+      <div class='event-value'>#{e[:value]}</div>
+    </div>"
+  end.join("\n")
+
+  # 4. Photo Gallery
+  photos_html = photos.map do |p|
+    "<div class='gallery-item'>
+      <img src='#{p[:file]}' alt='#{p[:title]}'>
+    </div>"
+  end.join("\n")
+
+  # 5. Documents
+  docs_a4_html = docs_a4.map do |d|
+    "<div class='doc-card'>
+      <img src='#{d[:file]}' alt='#{d[:title]}'>
+      <div class='doc-title'>#{d[:title]}</div>
+    </div>"
+  end.join("\n")
+
+  docs_a3_html = docs_a3.map do |d|
+    "<div class='doc-card'>
+      <img src='#{d[:file]}' alt='#{d[:title]}'>
+      <div class='doc-title'>#{d[:title]}</div>
+    </div>"
+  end.join("\n")
+
+  # Replace placeholders
+  html = template.dup
+  html.gsub!("{{NAME}}", person[:name])
+  html.gsub!("{{DATES}}", "#{person[:born_date]} — #{person[:death_date]}")
+  html.gsub!("{{PROFILE_PHOTO}}", profile_photo)
+  html.gsub!("{{BIOGRAPHY}}", person[:notes].join("\n\n"))
+  html.gsub!("{{ANCESTORS_TABLE}}", ancestors_html)
+  html.gsub!("{{EVENTS_LIST}}", events_html)
+  html.gsub!("{{PHOTO_GALLERY}}", photos_html)
+  html.gsub!("{{DOCUMENTS_A4}}", docs_a4_html)
+  html.gsub!("{{DOCUMENTS_A3}}", docs_a3_html)
+
+  File.write(File.join(person_dir, "index.html"), html)
+end
+
 def sanitize(str)
   res = str.to_s.gsub(/[^\w\p{Cyrillic}.]/, '_')
   res.gsub(/_+/, '_').gsub(/^_+|_+$/, '')
@@ -339,6 +463,17 @@ def get_ancestors_list(id, depth, color, inds, fams, list)
     end
     get_ancestors_list(h, depth + 1, hc, inds, fams, list) if h
     get_ancestors_list(w, depth + 1, wc, inds, fams, list) if w
+  end
+end
+
+# Prepare publishing
+publish_template = nil
+if options[:publish]
+  template_path = File.join('assets', 'templates', 'person.html')
+  if File.exist?(template_path)
+    publish_template = File.read(template_path)
+  else
+    puts "Warning: Template not found at #{template_path}"
   end
 end
 
@@ -407,6 +542,13 @@ target_ids.each do |id|
   sub_res = []
   get_ancestors_list(id, 0, "Root", individuals, families, sub_res)
   write_csv(sub_csv, ["Id", "Depth", "Color", "Fully Qualified Name", "Born Date", "Death Date", "Birth Place", "Other Info"], sub_res)
+
+  # HTML Generation
+  if options[:publish] == 'all' || options[:publish] == clean_id || options[:publish] == id
+    if publish_template
+      generate_person_html(id, person, sub_res, person_dir, publish_template)
+    end
+  end
 end
 
 main_csv_path = File.join(PRIV_DIR, "sokhatsky_familysearch.csv")
