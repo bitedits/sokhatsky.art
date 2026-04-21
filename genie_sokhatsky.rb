@@ -3,7 +3,7 @@ require 'fileutils'
 require 'optparse'
 require 'pathname'
 
-options = { all: true, recursive: nil, publish: nil, epoc: 'priv', epoc_out: nil }
+options = { all: true, recursive: nil, publish: nil, epoc: 'priv', epoc_out: nil, index: nil }
 OptionParser.new do |opts|
   opts.banner = "Usage: genie_sokhatsky.rb [options]"
 
@@ -26,6 +26,10 @@ OptionParser.new do |opts|
 
   opts.on("--epoc-out DIR", "Output top level folder for static files (overrides --epoc)") do |dir|
     options[:epoc_out] = dir
+  end
+
+  opts.on("--index DIR", "Generate index.html in the specified folder") do |dir|
+    options[:index] = dir
   end
 end.parse!
 
@@ -91,9 +95,15 @@ def generate_html(folder_name, storage_path, static_path)
       end
     else
       photos_html << "<div class='gallery-item'><img src='#{relative_path}' alt='#{titl}'></div>"
-      # Heuristic for profile photo: first image found
-      profile_photo = relative_path if profile_photo.include?("no-avatar.png")
     end
+  end
+
+  # Select Profile Photo: find image with shortest suffix (image-ID-SUFFIX.EXT)
+  all_images = files.select { |f| f.start_with?("image-#{clean_id}") }
+  unless all_images.empty?
+    best_image = all_images.min_by { |f| f.gsub(/^image-#{clean_id}-/, '').split('.').first.length }
+    storage_asset_path = Pathname.new(File.join(storage_path, best_image))
+    profile_photo = storage_asset_path.relative_path_from(static_page_dir).to_s
   end
 
   # 2. Ancestors Table
@@ -151,17 +161,27 @@ def generate_html(folder_name, storage_path, static_path)
   html.gsub!("{{DATES}}", "#{indi_data['Born Date']} — #{indi_data['Death Date']}")
   html.gsub!("{{PROFILE_PHOTO}}", profile_photo)
   
-  if bio.to_s.strip.empty?
-    html.gsub!(/<section class="biography">.*?<\/section>/m, "")
-  else
-    html.gsub!("{{BIOGRAPHY}}", bio.gsub("\n", "<br>"))
+  # Hide empty sections
+  def replace_section(html, id, content, placeholder)
+    if content.to_s.strip.empty?
+      html.gsub!(/<section id="#{id}">.*?<\/section>/m, "")
+    else
+      html.gsub!(placeholder, content)
+    end
   end
 
-  html.gsub!("{{ANCESTORS_TABLE}}", ancestors_html)
-  html.gsub!("{{EVENTS_LIST}}", events_html)
-  html.gsub!("{{PHOTO_GALLERY}}", photos_html.join("\n"))
-  html.gsub!("{{DOCUMENTS_A4}}", docs_a4_html.join("\n"))
-  html.gsub!("{{DOCUMENTS_A3}}", docs_a3_html.join("\n"))
+  replace_section(html, "biography", bio.to_s.gsub("\n", "<br>"), "{{BIOGRAPHY}}")
+  replace_section(html, "ancestors", ancestors_html, "{{ANCESTORS_TABLE}}")
+  replace_section(html, "events", events_html, "{{EVENTS_LIST}}")
+  replace_section(html, "photos", photos_html.join("\n"), "{{PHOTO_GALLERY}}")
+  
+  # Special case for documents: combine A4 and A3 check
+  if docs_a4_html.empty? && docs_a3_html.empty?
+    html.gsub!(/<section id="documents">.*?<\/section>/m, "")
+  else
+    html.gsub!("{{DOCUMENTS_A4}}", docs_a4_html.join("\n"))
+    html.gsub!("{{DOCUMENTS_A3}}", docs_a3_html.join("\n"))
+  end
 
   FileUtils.mkdir_p(static_path)
   File.write(File.join(static_path, "index.html"), html)
@@ -224,6 +244,79 @@ def repack_gedcom(output_path)
   puts "Repack complete: #{output_path} (#{File.size(output_path)} bytes)"
 end
 
+def generate_index(output_dir, folders)
+  puts "Generating index in #{output_dir}..."
+  index_template_path = File.join('assets', 'templates', 'index.html')
+  return puts "Error: Index template not found" unless File.exist?(index_template_path)
+  template = File.read(index_template_path)
+  
+  people_data = []
+  
+  folders.each do |folder|
+    clean_id = folder.split('-').first
+    storage_path = File.join(STORAGE_DIR, folder)
+    indi_csv = File.join(storage_path, "indi-#{clean_id}.csv")
+    next unless File.exist?(indi_csv)
+    
+    indi_data = Hash[read_csv(indi_csv).map { |r| [r["Field"], r["Value"]] }]
+    
+    # Heuristic for sorting and grouping
+    full_name = indi_data["Name"] || clean_id
+    surname = full_name.split(' ').last || ""
+    first_letter = surname.strip[0] || full_name.strip[0] || "?"
+    
+    year = indi_data['Born Date'].to_s.scan(/\d{4}/).first || "9999"
+    
+    # Calculate relative link from index page to person page
+    index_dir = Pathname.new(output_dir)
+    person_page_path = Pathname.new(File.join(STATIC_DIR, folder, "index.html"))
+    rel_link = person_page_path.relative_path_from(index_dir).to_s
+    
+    people_data << {
+      id: clean_id,
+      name: full_name,
+      surname: surname,
+      first_letter: first_letter.upcase,
+      dates: "#{indi_data['Born Date']} — #{indi_data['Death Date']}",
+      born_sort: year,
+      link: rel_link
+    }
+  end
+  
+  # Group by letter
+  grouped = people_data.group_by { |p| p[:first_letter] }.sort
+  
+  index_html = ""
+  grouped.each do |letter, members|
+    # Sort members historically (chronologically)
+    sorted_members = members.sort_by { |m| m[:born_sort] }
+    
+    index_html << "<section class='letter-section'>\n"
+    index_html << "  <div class='letter-header'>#{letter}</div>\n"
+    index_html << "  <div class='entry-list'>\n"
+    sorted_members.each do |m|
+      index_html << "    <a href='#{m[:link]}' class='entry-item'>\n"
+      index_html << "      <span class='name'>#{m[:name]}</span>\n"
+      index_html << "      <span class='dates'>#{m[:dates]}</span>\n"
+      index_html << "    </a>\n"
+    end
+    index_html << "  </div>\n"
+    index_html << "</section>\n"
+  end
+  
+  # Calculate relative path to assets root from the index page
+  assets_root = Pathname.new("assets")
+  static_page_dir = Pathname.new(output_dir)
+  assets_rel = assets_root.relative_path_from(static_page_dir).to_s
+  
+  final_html = template.gsub("{{INDEX_CONTENT}}", index_html)
+  final_html.gsub!("{{ASSETS_PATH}}", assets_rel)
+  
+  FileUtils.mkdir_p(output_dir)
+  File.write(File.join(output_dir, "index.html"), final_html)
+  puts "Index complete: #{output_dir}/index.html"
+end
+
 # Main Execution
 if options[:gedcom]
   repack_gedcom(options[:gedcom])
@@ -246,3 +339,9 @@ folders.each do |folder|
 end
 
 puts "Static site generation complete in #{STATIC_DIR}/"
+
+if options[:index]
+  # Refresh folders list to include all for index
+  all_folders = Dir.entries(STORAGE_DIR).select { |entry| File.directory?(File.join(STORAGE_DIR, entry)) && !(entry =='.' || entry == '..') }
+  generate_index(options[:index], all_folders)
+end
