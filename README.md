@@ -68,7 +68,7 @@ Format: A CSV containing a list of all ancestors for this specific person up to 
 
 ### Edit
 
-You can edit the bio-ID.txt or indi-ID.csv directly in the file system.
+You can edit the bio-ID.txt or indi-ID.csv directly in the file system. Or create you own editors!
 
 ### Generate
 
