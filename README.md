@@ -40,10 +40,10 @@ Intent: Stores the narrative biography or descriptive notes.
 Source: Extracted from GEDCOM NOTE, CONT, and CONC tags.
 Format: Plain text. During a "repack," this file's content is used to rebuild the NOTE block in the final GEDCOM.
 
-### events (events-ID.csv / events-ID.txt)
+### events (events-ID.csv)
 
 Intent: Captures specific life events beyond birth/death (e.g., Occupations, Residences, Military Service).
-Format: .csv: Structural data with headers Tag, Value, Date, Place. .txt: A human-readable summary for quick previewing. 
+Format: .csv: Structural data with headers Tag, Value, Date, Place.
 
 ### indi (indi-ID.csv)
 
