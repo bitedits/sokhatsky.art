@@ -78,3 +78,10 @@ You can edit the bio-ID.txt or indi-ID.csv directly in the file system.
 
 `genie_sokhatsky.rb -g out.ged` merges all modular files back into a single valid GEDCOM file,
 incorporating any manual edits you made to the text/CSV files.
+
+Authors
+-------
+
+* Maxim Sokhatsky
+* Oleg Sokhatsky
+
